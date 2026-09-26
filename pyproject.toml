@@ -1,7 +1,7 @@
 [project]
 name = "comfyui-krea2-ostris-edit" # Unique identifier for your node. Immutable after creation.
 description = "Krea 2 edit (reference image) nodes for LoRAs trained with ai-toolkit. Encodes prompts + reference images through the Krea 2 Qwen3-VL text encoder and patches the model to consume reference latents, with optional KV-cache conditioning."
-version = "1.0.1" # Custom Node version. Must be semantically versioned.
+version = "1.1.0" # Custom Node version. Must be semantically versioned.
 license = { file = "LICENSE" }
 dependencies = []
 

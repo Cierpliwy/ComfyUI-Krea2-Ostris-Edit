@@ -12,9 +12,11 @@ Adds Kontext-style multi-reference support to Krea 2 without touching core:
     conditioned at t=0 -- the ComfyUI Flux/QwenImage "index_timestep_zero"
     reference method.
 
-Both mirror the ai-toolkit ``krea2`` training implementation exactly:
-VL images are downscaled (never upscaled) to fit 384x384 total pixels,
-reference latents to fit 1MP, snapped to /16 so the latent grid patchifies.
+Both mirror the ai-toolkit ``krea2`` training implementation:
+VL images and reference latents are downscaled (never upscaled) — VL copies
+to a 384px longest edge and ref latents to a 1MP pixel budget by default,
+both adjustable via the encode node's inputs — and snapped to /16 so the
+latent grid patchifies.
 
 ``Krea2OstrisEditModelPatch``'s ``kv_cache`` toggle (default off) is for LoRAs
 trained with ai-toolkit's ``kv_cache`` model kwarg, where reference tokens
@@ -44,18 +46,32 @@ from comfy.text_encoders.krea2 import KREA2_TEMPLATE
 # Text encode (VL images -> conditioning, refs -> reference_latents)
 # ---------------------------------------------------------------------------
 
-VLM_MAX_PIXELS = 384 * 384  # Qwen3-VL sees a coarse reference
+VLM_MAX_EDGE = 384  # Qwen3-VL sees a coarse reference (longest edge)
 REF_LATENT_MAX_PIXELS = 1024 * 1024  # VAE ref latents carry the detail
 REF_SNAP = 16  # VAE f8 * patch 2 -> latent grid patchifies
 
 
 def _fit_area(samples, max_pixels, snap=1):
-    """Downscale (never upscale) a (B, C, H, W) image to fit ``max_pixels``,
-    keeping aspect, snapping dims to ``snap``."""
+    """Downscale (never upscale) a (B, C, H, W) image to fit ``max_pixels``
+    (0 = no limit), keeping aspect, snapping dims to ``snap``."""
     h, w = samples.shape[2], samples.shape[3]
+    if max_pixels <= 0:
+        return samples
     scale = min(1.0, math.sqrt(max_pixels / (w * h)))
     nw = max(round(w * scale / snap) * snap, snap)
     nh = max(round(h * scale / snap) * snap, snap)
+    if (nh, nw) == (h, w):
+        return samples
+    return comfy.utils.common_upscale(samples, nw, nh, "area", "disabled")
+
+
+def _fit_max_edge(samples, max_edge, snap=1):
+    """Downscale (never upscale) a (B, C, H, W) image so its longest edge is at
+    most ``max_edge``, keeping aspect, snapping dims down to ``snap``."""
+    h, w = samples.shape[2], samples.shape[3]
+    scale = min(1.0, max_edge / max(h, w))
+    nw = max(int(round(w * scale)) // snap * snap, snap)
+    nh = max(int(round(h * scale)) // snap * snap, snap)
     if (nh, nw) == (h, w):
         return samples
     return comfy.utils.common_upscale(samples, nw, nh, "area", "disabled")
@@ -74,6 +90,9 @@ class TextEncodeKrea2OstrisEdit:
                 "image1": ("IMAGE",),
                 "image2": ("IMAGE",),
                 "image3": ("IMAGE",),
+                "vlm_max_edge": ("INT", {"default": VLM_MAX_EDGE, "min": 128, "max": 768, "step": 16}),
+                "ref_max_pixels": ("INT", {"default": REF_LATENT_MAX_PIXELS, "min": 0, "max": 16777216, "step": 1,
+                                            "tooltip": "Max pixel budget for the VAE reference latents. 0 disables the limit."}),
             },
         }
 
@@ -85,9 +104,14 @@ class TextEncodeKrea2OstrisEdit:
         "LoRA. Images are fed to the Qwen3-VL text encoder (needs a text "
         "encoder checkpoint that includes the vision weights) and, when a VAE "
         "is connected, attached as reference latents for Krea2OstrisEditModelPatch."
+        " vlm_max_edge caps the longest edge of the VLM copy; ref_max_pixels "
+        "caps the pixel budget of the VAE reference latents (0 = no limit). "
+        "Larger refs add tokens to the sequence and cost VRAM and time per "
+        "denoise step."
     )
 
-    def encode(self, clip, prompt, vae=None, image1=None, image2=None, image3=None):
+    def encode(self, clip, prompt, vae=None, image1=None, image2=None, image3=None,
+               vlm_max_edge=VLM_MAX_EDGE, ref_max_pixels=REF_LATENT_MAX_PIXELS):
         images_vl = []
         ref_latents = []
         image_prompt = ""
@@ -96,9 +120,9 @@ class TextEncodeKrea2OstrisEdit:
             if image is None:
                 continue
             samples = image.movedim(-1, 1)
-            images_vl.append(_fit_area(samples, VLM_MAX_PIXELS).movedim(1, -1))
+            images_vl.append(_fit_max_edge(samples, vlm_max_edge, snap=REF_SNAP).movedim(1, -1))
             if vae is not None:
-                s = _fit_area(samples, REF_LATENT_MAX_PIXELS, snap=REF_SNAP)
+                s = _fit_area(samples, ref_max_pixels, snap=REF_SNAP)
                 ref_latents.append(vae.encode(s.movedim(1, -1)[:, :, :, :3]))
             image_prompt += (
                 "Picture {}: <|vision_start|><|image_pad|><|vision_end|>".format(

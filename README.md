@@ -19,7 +19,8 @@ category.
 
 ### Text Encode Krea 2 Ostris Edit
 
-Inputs: `clip`, `prompt`, optional `vae` and `image1`..`image3`.
+Inputs: `clip`, `prompt`, optional `vae`, `image1`..`image3`, `vlm_max_edge`
+(default 384), `ref_max_pixels` (default 1048576).
 Output: `CONDITIONING`.
 
 Encodes the prompt together with the reference images through the Krea 2
@@ -28,9 +29,10 @@ Qwen3-VL text encoder, using Krea's conditioning template with
 When a VAE is connected, each reference image is also VAE-encoded and attached
 to the conditioning as reference latents for the model patch node.
 
-Image sizing matches training: images fed to the Qwen3-VL encoder are
-downscaled (never upscaled) to fit 384x384 total pixels; reference latents to
-fit 1MP.
+Image sizing: images fed to the Qwen3-VL encoder are downscaled (never
+upscaled) so their longest edge fits `vlm_max_edge` (default 384); reference
+latents fit a `ref_max_pixels` pixel budget (default 1MP, 0 disables the
+limit).
 
 Note: the text encoder checkpoint must include the Qwen3-VL vision weights or
 the images cannot be encoded.
